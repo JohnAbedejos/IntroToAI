@@ -16,9 +16,11 @@ import math
 from scipy.stats import norm
 from scipy import stats
 
-#Don't know if newcessary
+#Don't know if necessary
 import warnings
 warnings.filterwarnings('ignore') # Disabling warnings for clearer outputs.
 pd.options.display.max_columns = 50 # Pandas option to increase max number of columns to display.
 plt.style.use('ggplot') # Setting default plot style.
 
+#Import training file
+training_data = pd.read_csv('train.csv')

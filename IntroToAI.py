@@ -22,5 +22,12 @@ warnings.filterwarnings('ignore') # Disabling warnings for clearer outputs.
 pd.options.display.max_columns = 50 # Pandas option to increase max number of columns to display.
 plt.style.use('ggplot') # Setting default plot style.
 
-#Import training file
+#Import training file and check
 training_data = pd.read_csv('train.csv')
+index = len(training_data)
+display(training_data.sample(5))
+
+#Import test file and check
+testing_data = pd.read_csv('test.csv')
+index = len(testing_data)
+display(testing_data.sample(5))

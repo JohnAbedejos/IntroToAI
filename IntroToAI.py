@@ -22,91 +22,25 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score, learning_c
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, roc_auc_score, roc_curve, plot_roc_curve, auc
 from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.gaussian_process import GaussianProcessClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.neural_network import MLPClassifier
-from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline, make_pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import RFE
 
-import xgboost as xgb
-import lightgbm as lgb
 from mlxtend.plotting import plot_decision_regions
 
-#Don't know if necessary
-import warnings
-warnings.filterwarnings('ignore') # Disabling warnings for clearer outputs.
-pd.options.display.max_columns = 50 # Pandas option to increase max number of columns to display.
-plt.style.use('ggplot') # Setting default plot style.
 
 #Import training file and check
 training_data = pd.read_csv('train.csv')
 index = len(training_data)
-#display(training_data.sample(5))
+display(training_data.sample(5))
 
 #Import test file and check
 testing_data = pd.read_csv('test.csv')
-index = len(testing_data)
-#display(testing_data.sample(5))
-
-#We decided it was best to merge both datasets for this piece of work and compare between them:
-
-#Merge data and check    
-training_data.drop('PassengerId', axis=1, inplace=True)
-testing_data.drop('PassengerId', axis=1, inplace=True)
-full_data = pd.concat([training_data, testing_data], sort=False).reset_index(drop=True)
-
-display(full_data.columns)
-display(full_data.info())
+display(testing_data.sample(5))
 
 
 
-categories = ['Survived', 'Pclass', 'Sex', 'SibSp', 'Parch', 'Embarked']
-def plotFrequency(categories):
-    
-    fig, axes = plt.subplots(math.ceil(len(categories)/3), 3, figsize=(29, 12))
-    axes = axes.flatten()
-    
-    for ax, cat in zip(axes, categories):
-        if cat == 'Survived':
-            total = float(len(training_data[cat]))
-        else:
-            total = float(len(full_data[cat]))
-        sns.countplot(full_data[cat], palette = 'viridis', ax=ax)
-        
-        for p in ax.patches:
-            height = p.get_height()
-            ax.text(p.get_x() + p.get_width() / 2., height + 10, '{:1.2f}%' .format((height/total) * 100), ha="center")
-        
-            #plt.ylabel('Number of Casualties', fontsize=15, weight='bold')
-        
-plotFrequency(categories)
-
-
-
-def plotsurvival(categories, data):
-    
-    '''A plot for bivariate analysis.'''
-  
-    fig, axes = plt.subplots(math.ceil(len(categories) / 3), 3, figsize=(20, 12))
-    axes = axes.flatten()
-
-    for ax, cat in zip(axes, categories):
-        if cat == 'Survived':
-            sns.countplot(training_data[cat], palette='viridis', ax=ax)
-
-        else:
-
-            sns.countplot(x=cat, data=data, hue='Survived', palette='viridis', ax=ax)
-            ax.legend(title='Survived?', loc='upper right', labels=['No', 'Yes'])
-
-        plt.ylabel('Count', fontsize=15, weight='bold')
-plotsurvival(categories, training_data)
-
-
-#Finding missing cabin data
+#Finding missing data (mostly cabin)
 
 fig, ax = plt.subplots(ncols=2, figsize=(20, 6))
 sns.heatmap(training_data.isnull(), yticklabels=False, cbar=False, cmap='binary', ax=ax[0])
@@ -120,17 +54,9 @@ plt.show()
 
 
 
-
-
-
-
-
-
-
-#Feature engineering toolbox
 def status(feature):
-    print('Processing', feature, ': DONE')
-    print(f'Shape after processing {training.shape}')
+    print('Preparing', feature, ': DONE')
+    print(f'Shape after preparation {joint.shape}')
     print('*' * 40)
     
 train = pd.read_csv('train.csv')
@@ -152,151 +78,233 @@ def get_test_data():
     return testing
 
 
-# Filling in the missing values for Age:
+#We decided it was best to merge both datasets and apply our functions to both at the same time:
+
+def get_joint_data():
+    joint = train.append(test)
+    joint.reset_index(inplace=True, drop=True)
+    
+    return joint
+
+
+#Join Parents, children, siblings and spouses
+def family_assembler():
+
+    global joint
+    joint['FamilySize'] = joint['Parch'] + joint['SibSp'] + 1
+    
+    joint['Alone'] = joint['FamilySize'].map(lambda s: 1
+                                                   if s == 1 else 0)
+
+    status('Family')
+    return joint
+
+
+#Calculating survival rate for members of the same family using Surname to check
+def survival_of_family():
+    global joint
+
+    # Getting surnames to form families: 
+    joint['Surname'] = joint['Name'].apply(lambda x: str.split(x, ",")[0])
+    
+    family_survival_rate = 0.5
+    joint['Family_saved'] = family_survival_rate
+
+    for grp, grp_df in joint[['Survived', 'Name', 'Surname', 'Fare', 'Ticket', 'PassengerId',
+                               'SibSp', 'Parch', 'Age', 'Cabin']].groupby(['Surname', 'Fare']):
+
+        if (len(grp_df) != 1):
+            
+            for ind, row in grp_df.iterrows():
+                smax = grp_df.drop(ind)['Survived'].max()
+                smin = grp_df.drop(ind)['Survived'].min()
+                passID = row['PassengerId']
+                if (smax == 1.0):
+                    joint.loc[joint['PassengerId'] == passID, 'Family_saved'] = 1
+                elif (smin == 0.0):
+                    joint.loc[joint['PassengerId'] == passID, 'Family_saved'] = 0
+
+    for _, grp_df in joint.groupby('Ticket'):
+        if (len(grp_df) != 1):
+            for ind, row in grp_df.iterrows():
+                if (row['Family_saved'] == 0) | (row['Family_saved'] == 0.5):
+                    smax = grp_df.drop(ind)['Survived'].max()
+                    smin = grp_df.drop(ind)['Survived'].min()
+                    passID = row['PassengerId']
+                    if (smax == 1.0):
+                        joint.loc[joint['PassengerId'] == passID, 'Family_saved'] = 1
+                    elif (smin == 0.0):
+                        joint.loc[joint['PassengerId'] == passID, 'Family_saved'] = 0
+
+    status('Family_saved')
+    
+    return joint
+
+def separate_titles():
+
+    title_dictionary = {
+        'Capt': 'Dr/Clergy/Mil',
+        'Lady': 'Honorific',
+        'Dr': 'Dr/Clergy/Mil',
+        'Rev': 'Dr/Clergy/Mil',
+        'Jonkheer': 'Honorific',
+        'Don': 'Honorific',
+        'Dona': 'Honorific',
+        'Sir': 'Honorific',
+        'Major': 'Dr/Clergy/Mil',
+        'Col': 'Dr/Clergy/Mil',
+        'the Countess': 'Honorific',
+        'Mme': 'Mrs',
+        'Mlle': 'Miss',
+        'Ms': 'Mrs',
+        'Mr': 'Mr',
+        'Mrs': 'Mrs',
+        'Miss': 'Miss',
+        'Master': 'Master'
+    }
+
+    joint['Title'] = joint['Name'].map(
+        lambda name: name.split(',')[1].split('.')[0].strip())
+
+    joint['Title'] = joint.Title.map(title_dictionary)
+    status('Title')
+    
+    return joint
+
+
+
+def name_fix():
+    
+    global joint
+    
+    joint.drop('Name', axis=1, inplace=True)
+
+    titles_fill = pd.get_dummies(joint['Title'], prefix='Title')
+    joint = pd.concat([joint, titles_fill], axis=1)
+    
+    joint.drop('Title', axis=1, inplace=True)
+
+    status('names')
+    return joint
+
+
+
 def age_fill():
-    global training
+    global joint
     
-    training['Age'] = training.groupby(['Pclass', 'Sex'])['Age'].apply(lambda x: x.fillna(x.median()))
+    joint['Age'] = joint.groupby(['Pclass', 'Sex'])['Age'].apply(lambda x: x.fillna(x.median()))
     status('Age')
-    return training
-
-# Filling in the missing values for Age:
-def age_fill2():
-    global testing
-    
-    testing['Age'] = testing.groupby(['Pclass', 'Sex'])['Age'].apply(lambda x: x.fillna(x.median()))
-    status('Age')
-    return testing
+    return joint
 
 
-# Ranging and grouping Ages
 def age_range():
-    global training
+    global joint
     
-    bins = [0, 3, 18, 40, 70, np.inf]
-    
-    names = ['Under_3', '3-18', '18-40', '40-70', 'Over_70']
-
-    training['Age Range'] = pd.cut(training['Age'], bins, labels=names)
-    
-    age_dummies = pd.get_dummies(training['Age Range'], prefix='Age Range')
-    training = pd.concat([training, age_dummies], axis=1)
-    training.drop('Age Range', inplace=True, axis=1)
-    training.drop('Age', inplace=True, axis=1)
-    status('Age Bins')
-    
-    return training
-
-def age_range2():
-    global testing
-    
-    bins = [0, 3, 18, 40, 70, np.inf]
+    ranges = [0, 3, 18, 40, 70, np.inf]
     
     names = ['Under_3', '3-18', '18-40', '40-70', 'Over_70']
 
-    testing['Age Range'] = pd.cut(testing['Age'], bins, labels=names)
+    joint['AgeRange'] = pd.cut(joint['Age'], ranges, labels=names)
     
-    age_dummies = pd.get_dummies(testing['Age Range'], prefix='Age Range')
-    testing = pd.concat([testing, age_dummies], axis=1)
-    testing.drop('Age Range', inplace=True, axis=1)
-    testing.drop('Age', inplace=True, axis=1)
-    status('Age Bins')
+    age_filled = pd.get_dummies(joint['AgeRange'], prefix='AgeRange')
+    joint = pd.concat([joint, age_filled], axis=1)
+    joint.drop('AgeRange', inplace=True, axis=1)
+    joint.drop('Age', inplace=True, axis=1)
+    status('AgeRange')
     
-    return testing
+    return joint
 
 
-# Filling missing values in fare:
 def fare_fill():
-    global testing
+    global joint
 
-    testing['Fare'] = testing.groupby(['Pclass', 'Sex'])['Fare'].apply(lambda x: x.fillna(x.median()))
+    joint['Fare'] = joint.groupby(['Pclass', 'Sex'])['Fare'].apply(lambda x: x.fillna(x.median()))
     status('fare')
-    return testing
+    return joint
 
 
-# Filling missing embarked values with the most frequent one:
+def fare_range(encode='None'):
+
+    global joint
+    
+    
+    ranges = [-1, 7.91, 14.454, 31, 99, 250, np.inf]
+    names = [0, 1, 2, 3, 4, 5]
+
+    joint['FareRange'] = pd.cut(joint['Fare'], ranges, labels=names).astype('int')
+    if encode == 'yes':
+        farerange_fill = pd.get_dummies(joint['FareRange'], prefix='FareRange')
+        joint = pd.concat([joint, farerange_fill], axis=1)
+        joint.drop('FareRange', inplace=True, axis=1)
+        joint.drop('Fare', inplace=True, axis=1)
+    elif encode == 'both':
+        farerange_fill = pd.get_dummies(joint['FareRange'], prefix='FareRange')
+        joint = pd.concat([joint, farerange_fill], axis=1)
+        joint.drop('FareRange', inplace=True, axis=1)
+    else:
+        joint.drop('Fare', inplace=True, axis=1)
+
+    status('FareRange')
+    
+    return joint
+
+
 def embarked_fill():
     
-    global training
+    global joint
     
-    training.Embarked.fillna(training.Embarked.mode()[0], inplace=True)
+    joint.Embarked.fillna(joint.Embarked.mode()[0], inplace=True)
     
-    # One hot encoding.
-    
-    embarked_dummies = pd.get_dummies(training['Embarked'], prefix='Embarked')
-    training = pd.concat([training, embarked_dummies], axis=1)
-    training.drop('Embarked', axis=1, inplace=True)
+    embarked_filled = pd.get_dummies(joint['Embarked'], prefix='Embarked')
+    joint = pd.concat([joint, embarked_filled], axis=1)
+    joint.drop('Embarked', axis=1, inplace=True)
     status('Embarked')
     
-    return training
+    return joint
 
 
 def gender_mapping():
-    global training
+    global joint
     
-    # Mapping string values with numerical ones.
-    
-    training['Sex'] = training['Sex'].map({'male': 0, 'female': 1})
+    joint['Sex'] = joint['Sex'].map({'male': 1, 'female': 0})
     status('Sex')
-    return training
+    return joint
 
 
-def gender_mapping2():
-    global testing
+
+def delete_redundant():
+    joint.drop('Cabin', axis=1, inplace=True)
+    joint.drop('PassengerId', inplace=True, axis=1)
+    joint.drop('Surname', inplace=True, axis=1)
+    joint.drop('Survived', inplace=True, axis=1)
+    joint.drop('Ticket', inplace=True, axis=1)
     
-    # Mapping string values with numerical ones.
-    
-    testing['Sex'] = testing['Sex'].map({'male': 0, 'female': 1})
-    status('Sex')
-    return testing
+    return joint
 
 
-del train['Cabin']
-del test['Cabin']
 
-training = get_train_data()
-testing = get_test_data()
-training = age_fill()
-testing = age_fill2()
-training = age_range()
-testing = age_range2()
-testing = fare_fill()
-training = embarked_fill()
-training = gender_mapping()
-testing = gender_mapping2()
+joint = get_joint_data()
+joint = survival_of_family()
+joint = family_assembler()
+joint = separate_titles()
+joint = name_fix()
+joint = age_fill()
+joint = age_range()
+joint = fare_fill()
+joint = fare_range(encode='no')
+joint = embarked_fill()
+joint = gender_mapping()
+joint = delete_redundant()
+
+print(f'Finished everything. Any missing values displayed here: {joint.isna().sum().sum()}')
 
 
-fig, ax = plt.subplots(ncols=2, figsize=(30, 15))
-#fig.tight_layout()
-sns.heatmap(training_data.isnull(), yticklabels=False, cbar=False, cmap='binary', ax=ax[0])
-sns.heatmap(training.isnull(), yticklabels=False, cbar=False, cmap='binary', ax=ax[1])
- 
-ax[0].set_title('Training Data with missing Values')
-ax[1].set_title('Training Data after processing age')
-
-plt.xticks(rotation=90)
-plt.show()    
-    
-fig, ax = plt.subplots(ncols=2, figsize=(30, 15))
-#fig.tight_layout()
-sns.heatmap(testing_data.isnull(), yticklabels=False, cbar=False, cmap='binary', ax=ax[0])
-sns.heatmap(testing.isnull(), yticklabels=False, cbar=False, cmap='binary', ax=ax[1])
- 
-ax[0].set_title('Testing Data with missing Values')
-ax[1].set_title('Testing Data after processing age')
-
-plt.xticks(rotation=90)
-plt.show()
-
-#display(training.sample(10))
-training_copy = training.copy()
-del training_copy['PassengerId']
 
 sns.set(font_scale=1.1)
-correlation_train = training_copy.corr()
-mask = np.triu(correlation_train.corr())
+correlation_data = joint.corr()
+mask = np.triu(correlation_data.corr())
 plt.figure(figsize=(18, 15))
-sns.heatmap(correlation_train,
+sns.heatmap(correlation_data,
             annot=True,
             fmt='.1f',
             cmap='coolwarm',
@@ -305,80 +313,52 @@ sns.heatmap(correlation_train,
             linewidths=1)
 
 plt.show()
+
 #TEST
-def recover_train_test_target():
-    global training
+def find_survived():
+    global joint
     y = pd.read_csv('train.csv', usecols=['Survived'])['Survived']
-    X = training.iloc[:index]
-    X_test = training.iloc[index:]
+    X = joint.iloc[:index]
+    X_test = joint.iloc[index:]
 
     return X, X_test, y
 
-X, X_test, y = recover_train_test_target()
+X, X_test, y = find_survived()
 
-print(f'X shape: {X.shape}')
-print(f'y shape: {y.shape}')
-print(f'X_test shape: {X_test.shape}')
+print(f'X: {X.shape}')
+print(f'y: {y.shape}')
+print(f'X test: {X_test.shape}')
+
 
 
 #Modelling Section
-cv = StratifiedKFold(10, shuffle=True, random_state=42)
 
-rf = RandomForestClassifier(criterion='gini',
-                            n_estimators=1750,
-                            max_depth=7,
-                            min_samples_split=6,
-                            min_samples_leaf=6,
-                            max_features='auto',
-                            oob_score=True,
-                            random_state=42,
-                            n_jobs=-1,
-                            verbose=0)
+cv = StratifiedKFold(10, shuffle=True, random_state=50)
 
-lg = lgb.LGBMClassifier(max_bin=4,
-                        num_iterations=550,
-                        learning_rate=0.0114,
-                        max_depth=3,
-                        num_leaves=7,
-                        colsample_bytree=0.35,
-                        random_state=42,
-                        n_jobs=-1)
+rf = RandomForestClassifier(
+    criterion='gini', n_estimators=1750, max_depth=7, min_samples_split=6, min_samples_leaf=6,
+    max_features='auto', oob_score=True, random_state=50,n_jobs=-1, verbose=0)
 
-xg = xgb.XGBClassifier(
-    n_estimators=2800,
-    min_child_weight=0.1,
-    learning_rate=0.002,
-    max_depth=2,
-    subsample=0.47,
-    colsample_bytree=0.35,
-    gamma=0.4,
-    reg_lambda=0.4,
-    random_state=42,
-    n_jobs=-1,
-)
 
 sv = SVC(probability=True)
 
 logreg = LogisticRegression(n_jobs=-1, solver='newton-cg')
 
-gb = GradientBoostingClassifier(random_state=42)
+gb = GradientBoostingClassifier(random_state=50)
 
-gnb = GaussianNB()
-
-mlp = MLPClassifier(random_state=42)
-
-estimators = [rf, lg, xg, gb, sv, logreg, gnb, mlp]
+estimators = [rf, gb, sv, logreg]
 
 
-def model_check(X, y, estimators, cv):
-    model_table = pd.DataFrame()
+
+
+def check(X, y, estimators, cv):
+    model_tables = pd.DataFrame()
 
     row_index = 0
     for est in estimators:
 
         MLA_name = est.__class__.__name__
-        model_table.loc[row_index, 'Model Name'] = MLA_name
-        #    model_table.loc[row_index, 'MLA Parameters'] = str(est.get_params())
+        model_tables.loc[row_index, 'Model Name'] = MLA_name
 
         cv_results = cross_validate(
             est,
@@ -390,21 +370,157 @@ def model_check(X, y, estimators, cv):
             n_jobs=-1
         )
 
-        model_table.loc[row_index, 'Train Accuracy Mean'] = cv_results[
-            'train_score'].mean()
-        model_table.loc[row_index, 'Test Accuracy Mean'] = cv_results[
-            'test_score'].mean()
-        model_table.loc[row_index, 'Test Std'] = cv_results['test_score'].std()
-        model_table.loc[row_index, 'Time'] = cv_results['fit_time'].mean()
+        model_tables.loc[row_index, 'Train Accuracy Mean'] = cv_results['train_score'].mean()
+        model_tables.loc[row_index, 'Test Accuracy Mean'] = cv_results['test_score'].mean()
+        model_tables.loc[row_index, 'Test Std'] = cv_results['test_score'].std()
+        model_tables.loc[row_index, 'Time'] = cv_results['fit_time'].mean()
 
         row_index += 1
 
-    model_table.sort_values(by=['Test Accuracy Mean'],
-                            ascending=False,
-                            inplace=True)
+    model_tables.sort_values(by=['Test Accuracy Mean'], ascending=False, inplace=True)
 
-    return model_table
+    return model_tables
 
-raw_models = model_check(X, y, estimators, cv)
-display(raw_models.style.background_gradient(cmap='summer_r'))
 
+
+model_output = check(X, y, estimators, cv)
+display(model_output.style.background_gradient(cmap='summer_r'))
+
+
+
+def model_graph(models, bins):
+    fig, ax = plt.subplots(figsize=(16, 8))
+    g = sns.barplot('Test Accuracy Mean',
+                    'Model Name',
+                    data=models,
+                    palette='viridis',
+                    orient='h',
+                    **{'xerr': models['Test Std']})
+    g.set_xlabel('Test Mean Accuracy')
+    g = g.set_title('Cross validation scores')
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=bins))
+    
+model_graph(model_output, 32)
+
+
+
+def roc_graphs(estimators, cv, X, y):
+
+    fig, axes = plt.subplots(math.ceil(len(estimators) / 2),
+                             2,
+                             figsize=(50, 50))
+    axes = axes.flatten()
+
+    for ax, estimator in zip(axes, estimators):
+        tprs = []
+        aucs = []
+        mean_fpr = np.linspace(0, 1, 100)
+
+        for i, (train, test) in enumerate(cv.split(X, y)):
+            estimator.fit(X.loc[train], y.loc[train])
+            viz = plot_roc_curve(estimator,
+                                 X.loc[test],
+                                 y.loc[test],
+                                 name='ROC fold {}'.format(i),
+                                 alpha=0.3,
+                                 lw=1,
+                                 ax=ax)
+            interp_tpr = interp(mean_fpr, viz.fpr, viz.tpr)
+            interp_tpr[0] = 0.0
+            tprs.append(interp_tpr)
+            aucs.append(viz.roc_auc)
+
+        ax.plot([0, 1], [0, 1],
+                linestyle='--',
+                lw=2,
+                color='r',
+                label='Chance',
+                alpha=.8)
+
+        mean_tpr = np.mean(tprs, axis=0)
+        mean_tpr[-1] = 1.0
+        mean_auc = auc(mean_fpr, mean_tpr)
+        std_auc = np.std(aucs)
+        ax.plot(mean_fpr,
+                mean_tpr,
+                color='b',
+                label=r'Mean ROC (AUC = %0.2f $\pm$ %0.2f)' %
+                (mean_auc, std_auc),
+                lw=2,
+                alpha=.8)
+
+        std_tpr = np.std(tprs, axis=0)
+        tprs_upper = np.minimum(mean_tpr + std_tpr, 1)
+        tprs_lower = np.maximum(mean_tpr - std_tpr, 0)
+        ax.fill_between(mean_fpr,
+                        tprs_lower,
+                        tprs_upper,
+                        color='blue',
+                        alpha=.2,
+                        label=r'$\pm$ 1 std. dev.')
+
+        ax.set(xlim=[-0.02, 1.02],
+               ylim=[-0.02, 1.02],
+               title=f'{estimator.__class__.__name__} ROC')
+        ax.legend(loc='lower right', prop={'size': 18})
+    #plt.show()
+    plt.savefig('ROC Graphs.png')
+    
+roc_graphs(estimators, cv, X, y)
+
+
+
+def learning_curve_graphs(estimators, X, y, ylim=None, cv=None, n_jobs=None,
+                        train_sizes=np.linspace(.1, 1.0, 5)):
+
+    fig, axes = plt.subplots(math.ceil(len(estimators) / 2), 2, figsize=(50, 50))
+    
+    axes = axes.flatten()
+
+    for ax, estimator in zip(axes, estimators):
+
+        ax.set_title(f'{estimator.__class__.__name__} Learning Curve')
+        if ylim is not None:
+            ax.set_ylim(*ylim)
+        ax.set_xlabel('Training examples')
+        ax.set_ylabel('Score')
+
+        train_sizes, train_scores, test_scores, fit_times, _ = \
+            learning_curve(estimator, X, y, cv=cv, n_jobs=n_jobs,
+                           train_sizes=train_sizes,
+                           return_times=True)
+        train_scores_mean = np.mean(train_scores, axis=1)
+        train_scores_std = np.std(train_scores, axis=1)
+        test_scores_mean = np.mean(test_scores, axis=1)
+        test_scores_std = np.std(test_scores, axis=1)
+
+
+        ax.fill_between(train_sizes,
+                        train_scores_mean - train_scores_std,
+                        train_scores_mean + train_scores_std,
+                        alpha=0.1,
+                        color='r')
+        ax.fill_between(train_sizes,
+                        test_scores_mean - test_scores_std,
+                        test_scores_mean + test_scores_std,
+                        alpha=0.1,
+                        color='g')
+        ax.plot(train_sizes,
+                train_scores_mean,
+                'o-',
+                color='red',
+                label='Training score')
+        ax.plot(train_sizes,
+                test_scores_mean,
+                'o-',
+                color='green',
+                label='Cross-validation score')
+        ax.legend(loc='best')
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=24))
+
+    #plt.show()
+    plt.savefig('Learning curve graphs.png')
+
+
+learning_curve_graphs(estimators, X, y, ylim=None, cv=cv, n_jobs=-1,
+                    train_sizes=np.linspace(.1, 1.0, 10))
